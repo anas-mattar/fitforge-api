@@ -1,0 +1,42 @@
+# project-gate.yml — filled from the kit template (.github/workflows/project-gate.yml.template
+# in the governance repository, anas-mattar/FitForge-spec).
+#
+# Runs FitForge's BACKEND gate, exactly as docs/sdlc/gate-command.md defines it. A push-event
+# run of this workflow is the evidence a CI-held certification cites: the run page shows the
+# command, the conclusion, and the commit sha (constitution X). A pull_request-event run
+# executes a merge preview, not the phase commit, and certifies nothing.
+#
+# The setup-dotnet step is not in the kit template — the template ships the checkout and the
+# chain, and each project adds its own toolchain. `global.json` pins the SDK so CI and both
+# developers' machines mean the same thing by "the gate".
+
+name: project-gate
+
+on:
+  push:
+    branches:
+      - main
+      - '[0-9][0-9][0-9]-*'
+      - 'fix/**'
+      - 'chore/**'
+      - 'docs/**'
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  project-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up .NET (version pinned by global.json)
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+      - name: Run the project gate
+        working-directory: '.'
+        shell: bash
+        run: |
+          dotnet build --warnaserror && dotnet test

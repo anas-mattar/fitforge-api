@@ -1,0 +1,101 @@
+# code-repo-scope-check.yml — filled from the kit template for fitforge-api
+# (kit feature 012, GAP-016; docs/sdlc/repository-strategy.md, "Territory across
+# repositories"). Its sibling, project-gate.yml.template, runs your gate; this one runs
+# Definition of Done gate 4 — the machine scope check — over this repository's phase
+# commits.
+#
+# WHY IT EXISTS: in the nested layout the Territory declaration lives in the GOVERNANCE
+# repository (specs/NNN-name/tasks.md) while the code lives here. Governance CI clones the
+# governance repository alone and reports `n/a` for this repository; this workflow closes
+# that gap from the other side by checking out the governance repository as a sibling and
+# running its checker against this repository's commits.
+#
+# The `.template` suffix keeps this file inert — GitHub never runs it. To use it:
+#
+#   1. COPY it into THIS CODE REPOSITORY as .github/workflows/code-repo-scope-check.yml.
+#      Leave the template untouched in the governance repository: it is surgical-class, so
+#      kit updates report upstream changes but never rewrite your filled copy.
+#   2. Fill GOVERNANCE_REPO with `owner/name` of the governance repository, and
+#      CODE_REPO_DIR with this repository's directory name EXACTLY as it is declared in
+#      the governance repository's kit-adoption.json `codeRepos` — the check prefixes this
+#      repository's paths with that name before matching territory entries. A name that is
+#      not in `codeRepos` fails the job with an error naming the declared set.
+#   3. FitForge's governance repository (anas-mattar/FitForge-spec) is PUBLIC, so the
+#      `token:` line was deleted. If it is ever made private, restore it and add a
+#      read-only GOVERNANCE_TOKEN secret. NEVER inline a credential.
+#   4. Feature branches must share the same NNN-name in both repositories (the
+#      Cross-Repository Feature Rule) — that is what lets the check find the declaration.
+#      The governance checkout below deliberately does NOT pin a ref: `fetch-depth: 0`
+#      brings every remote-tracking ref, and the checker searches refs/heads/<branch>, then
+#      refs/remotes/origin/<branch>, then HEAD. Pinning would fail the whole job the day the
+#      governance branch is merged and deleted while this repository still pushes to its own.
+#
+# READING A RUN. The job FAILS on: a path outside the declared Territory; a malformed or
+# duplicated declaration; a Micro feature with no Territory block; a declaration that
+# POST-DATES the commit (declare territory before committing the code); and a CODE_REPO_DIR
+# not present in `codeRepos` (an error naming the declared set).
+# The job PASSES WITHOUT GRADING — WARN, n/a or "not applicable" on every line — when no
+# declaration exists in governance history at all, when this repository has no branch of that
+# name, when its trunk is not main (pass -BaseRef), or when no commit carries a `phase N`
+# subject token. A run like that is not a green gate: check the wiring.
+#
+# Recommended once it has run and graded: require the `code-repo-scope-check` status check on
+# this repository's main (docs/sdlc/branch-protection.md).
+
+name: code-repo-scope-check
+
+# PUSH EVENTS ONLY, deliberately: actions/checkout gives a real local branch on a push,
+# while a pull_request checkout is a detached merge preview with no NNN-name branch — the
+# checker would report 'no branch here' and pass without grading anything. The push-event
+# run is also the one CI-held certification cites (docs/sdlc/gate-command.md).
+on:
+  push:
+    branches:
+      - '[0-9][0-9][0-9]-*'
+
+permissions:
+  contents: read
+
+jobs:
+  code-repo-scope-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out this code repository
+        uses: actions/checkout@v4
+        with:
+          # the checker walks this branch's history back to its merge base with main
+          fetch-depth: 0
+          path: 'fitforge-api'
+
+      - name: Check out the governance repository as the parent
+        uses: actions/checkout@v4
+        with:
+          repository: 'anas-mattar/FitForge-spec'
+          # no ref: pinned on purpose — fetch-depth 0 brings the remote-tracking refs and the
+          # checker finds the feature's declaration on origin/<branch> (see the header)
+          # the declaration is read as of each code commit's date — full history required
+          fetch-depth: 0
+          # nothing after checkout needs the credential; the checker never fetches
+          persist-credentials: false
+          path: governance
+
+      - name: Nest the code repository inside the governance checkout
+        shell: bash
+        env:
+          CODE_REPO_DIR: 'fitforge-api'
+        run: mv "$CODE_REPO_DIR" "governance/$CODE_REPO_DIR"
+
+      - name: Machine scope check against the declared territory
+        shell: pwsh
+        working-directory: governance
+        # The branch name goes through an env var, NEVER interpolated into `run:` —
+        # github.head_ref is attacker-controlled on fork PRs and refnames may contain
+        # shell metacharacters (same hardening as ritual-checks.yml).
+        env:
+          SCOPE_BRANCH: ${{ github.ref_name }}
+          CODE_REPO_DIR: 'fitforge-api'
+        run: >
+          ./scripts/scope-check-repos.ps1
+          -Repo $env:CODE_REPO_DIR
+          -Branch $env:SCOPE_BRANCH
+          -All
