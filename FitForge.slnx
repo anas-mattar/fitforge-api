@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/FitForge.Api/FitForge.Api.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/FitForge.Api.Tests/FitForge.Api.Tests.csproj" />
+  </Folder>
+</Solution>
