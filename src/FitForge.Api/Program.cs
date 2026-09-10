@@ -1,41 +1,40 @@
+using FitForge.Api.Features.Health;
+using FitForge.Api.Hosting;
+using FitForge.Infrastructure;
+
 var builder = WebApplication.CreateBuilder(args);
 
-// Add services to the container.
-// Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
 builder.Services.AddOpenApi();
+
+// The host asks for persistence; it does not configure it (ADR-001 §4.3). The connection
+// string, the provider and the readiness check are all decided inside Infrastructure, so
+// this project never names any of them.
+builder.Services.AddFitForgePersistence(builder.Configuration);
+
+// RFC 9457 for every failure (ADR-001 §4.4). AddProblemDetails supplies the writer, the
+// exception handler maps domain failures, and UseStatusCodePages covers the responses no
+// handler produced a body for — 404 on an unmatched route, 405 on a wrong method.
+builder.Services.AddProblemDetails();
+builder.Services.AddExceptionHandler<DomainExceptionHandler>();
 
 var app = builder.Build();
 
-// Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())
 {
     app.MapOpenApi();
 }
 
+app.UseExceptionHandler();
+app.UseStatusCodePages();
+
 app.UseHttpsRedirection();
 
-var summaries = new[]
-{
-    "Freezing", "Bracing", "Chilly", "Cool", "Mild", "Warm", "Balmy", "Hot", "Sweltering", "Scorching"
-};
-
-app.MapGet("/weatherforecast", () =>
-{
-    var forecast =  Enumerable.Range(1, 5).Select(index =>
-        new WeatherForecast
-        (
-            DateOnly.FromDateTime(DateTime.Now.AddDays(index)),
-            Random.Shared.Next(-20, 55),
-            summaries[Random.Shared.Next(summaries.Length)]
-        ))
-        .ToArray();
-    return forecast;
-})
-.WithName("GetWeatherForecast");
+app.MapHealthEndpoints();
 
 app.Run();
 
-record WeatherForecast(DateOnly Date, int TemperatureC, string? Summary)
-{
-    public int TemperatureF => 32 + (int)(TemperatureC / 0.5556);
-}
+/// <summary>
+/// Exposed so <c>WebApplicationFactory&lt;Program&gt;</c> can host this application in
+/// tests — top-level statements otherwise compile to an internal type.
+/// </summary>
+public partial class Program;

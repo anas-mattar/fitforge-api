@@ -1,6 +1,13 @@
 @FitForge.Api_HostAddress = http://localhost:5212
 
-GET {{FitForge.Api_HostAddress}}/weatherforecast/
+### Liveness — is the process able to serve HTTP? Never touches the database.
+GET {{FitForge.Api_HostAddress}}/health/live
 Accept: application/json
 
-###
+### Readiness — can it serve real requests? 200 ready, 503 degraded.
+GET {{FitForge.Api_HostAddress}}/health/ready
+Accept: application/json
+
+### Any unmatched route must answer as application/problem+json, not framework HTML.
+GET {{FitForge.Api_HostAddress}}/no-such-route
+Accept: application/json

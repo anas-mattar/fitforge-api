@@ -1,8 +1,11 @@
 <Solution>
   <Folder Name="/src/">
     <Project Path="src/FitForge.Api/FitForge.Api.csproj" />
+    <Project Path="src/FitForge.Domain/FitForge.Domain.csproj" />
+    <Project Path="src/FitForge.Infrastructure/FitForge.Infrastructure.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/FitForge.Api.Tests/FitForge.Api.Tests.csproj" />
+    <Project Path="tests/FitForge.Domain.Tests/FitForge.Domain.Tests.csproj" />
   </Folder>
 </Solution>
