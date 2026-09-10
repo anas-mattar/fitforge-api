@@ -1,3 +1,4 @@
+using System;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Hosting;
@@ -36,6 +37,19 @@ internal sealed class FitForgeApiFactory : WebApplicationFactory<Program>
     /// </summary>
     public string? DatabaseFailureDetail { get; init; }
 
+    /// <summary>
+    /// Makes the stubbed check take this long. Paired with <see cref="DatabaseTimeout"/>
+    /// it reproduces a check that overruns its bound, without a test that waits real
+    /// seconds to find out.
+    /// </summary>
+    public TimeSpan? DatabaseDelay { get; init; }
+
+    /// <summary>
+    /// Timeout carried by the stubbed registration. Unset, the stub has none — which is
+    /// what every test that is not about timeouts wants.
+    /// </summary>
+    public TimeSpan? DatabaseTimeout { get; init; }
+
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         builder.UseSetting("Database:ConnectionString",
@@ -48,21 +62,30 @@ internal sealed class FitForgeApiFactory : WebApplicationFactory<Program>
                 options.Registrations.Clear();
                 options.Registrations.Add(new HealthCheckRegistration(
                     name: "database",
-                    factory: _ => new StubHealthCheck(DatabaseStatus, DatabaseFailureDetail),
+                    factory: _ => new StubHealthCheck(DatabaseStatus, DatabaseFailureDetail, DatabaseDelay),
                     failureStatus: HealthStatus.Unhealthy,
-                    tags: null));
+                    tags: null,
+                    timeout: DatabaseTimeout));
             });
         });
     }
 
-    private sealed class StubHealthCheck(HealthStatus status, string? detail) : IHealthCheck
+    private sealed class StubHealthCheck(HealthStatus status, string? detail, TimeSpan? delay) : IHealthCheck
     {
-        public Task<HealthCheckResult> CheckHealthAsync(
+        public async Task<HealthCheckResult> CheckHealthAsync(
             HealthCheckContext context,
             CancellationToken cancellationToken = default)
         {
-            var exception = detail is null ? null : new System.InvalidOperationException(detail);
-            return Task.FromResult(new HealthCheckResult(status, detail, exception));
+            if (delay is { } pause)
+            {
+                // Honours the token, as a real check must: the timeout is enforced by
+                // cancelling the check, and a check that ignores cancellation overruns
+                // its bound regardless of what the registration says.
+                await Task.Delay(pause, cancellationToken).ConfigureAwait(false);
+            }
+
+            var exception = detail is null ? null : new InvalidOperationException(detail);
+            return new HealthCheckResult(status, detail, exception);
         }
     }
 }
