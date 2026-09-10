@@ -32,13 +32,20 @@ internal static class HealthEndpoints
         {
             var report = await healthChecks.CheckHealthAsync(cancellationToken);
 
+            // One rule, applied at both levels: anything short of Healthy is not ready.
+            //
+            // Until phase 8 the document tested `== Unhealthy` while each check tested
+            // `== Healthy`, so a Degraded dependency landed on opposite sides — HTTP 200
+            // and "status":"ready", containing "status":"failed". The BFF branches on the
+            // status code, so that reached the browser as a ready API with a dependency
+            // down. Unreachable with one check; reachable the moment there are two.
+            var ready = report.Status == HealthStatus.Healthy;
+
             var response = new ReadinessResponse(
-                Status: report.Status == HealthStatus.Unhealthy ? "degraded" : "ready",
+                Status: ready ? "ready" : "degraded",
                 Checks: report.Entries
                     .Select(entry => new ReadinessCheck(
                         Name: entry.Key,
-                        // A degraded dependency is not a ready one: the contract has two
-                        // per-check values, so anything short of Healthy reports "failed".
                         Status: entry.Value.Status == HealthStatus.Healthy ? "ready" : "failed",
                         DurationMs: (long)entry.Value.Duration.TotalMilliseconds))
                     .OrderBy(check => check.Name, System.StringComparer.Ordinal)
@@ -47,9 +54,9 @@ internal static class HealthEndpoints
             // Deliberately nothing else. The check's own Description and Exception carry
             // server names, connection strings and provider messages, and this endpoint
             // is reachable by anything that can reach the API (contract §1).
-            return report.Status == HealthStatus.Unhealthy
-                ? Results.Json(response, statusCode: StatusCodes.Status503ServiceUnavailable)
-                : Results.Ok(response);
+            return ready
+                ? Results.Ok(response)
+                : Results.Json(response, statusCode: StatusCodes.Status503ServiceUnavailable);
         })
             .WithName("HealthReady")
             .WithTags("Health");

@@ -63,6 +63,35 @@ public class HealthReadyTests
 
         var check = Assert.Single(body.GetProperty("checks").EnumerateArray());
         Assert.Equal("failed", check.GetProperty("status").GetString());
+
+        // The three assertions this test was missing until phase 8. It asserted only the
+        // per-check field, which was already correct, and so passed for a year's worth of
+        // reviews over a document that said "ready" at the top and "failed" underneath —
+        // with a 200 the BFF reads as a healthy API.
+        Assert.Equal("degraded", body.GetProperty("status").GetString());
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        Assert.NotEqual("ready", body.GetProperty("status").GetString());
+    }
+
+    [Fact]
+    public async Task A_degraded_dependency_and_an_unhealthy_one_are_reported_identically()
+    {
+        // The contract has two document-level words, the framework has three states, and
+        // the mapping from three to two must not depend on which of the two failure
+        // states occurred. Whichever it is, the caller is told the same thing.
+        using var degradedFactory = new FitForgeApiFactory { DatabaseStatus = HealthStatus.Degraded };
+        using var unhealthyFactory = new FitForgeApiFactory { DatabaseStatus = HealthStatus.Unhealthy };
+
+        using var degradedClient = degradedFactory.CreateClient();
+        using var unhealthyClient = unhealthyFactory.CreateClient();
+
+        var degraded = await degradedClient.GetAsync("/health/ready");
+        var unhealthy = await unhealthyClient.GetAsync("/health/ready");
+
+        Assert.Equal(unhealthy.StatusCode, degraded.StatusCode);
+        Assert.Equal(
+            (await unhealthy.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("status").GetString(),
+            (await degraded.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("status").GetString());
     }
 
     [Fact]

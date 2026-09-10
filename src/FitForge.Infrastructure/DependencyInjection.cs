@@ -35,8 +35,14 @@ public static class DependencyInjection
     /// Two seconds, not the three the contract gives the document: three bounds the whole
     /// readiness response, and a check bounded at exactly three cannot fit inside it. At
     /// three the document measured 3.03s — over the bound it was meant to satisfy. At two
-    /// it measures 2.04s warm and 2.83s cold, and the second of headroom is what the next
-    /// dependency check will be spending.
+    /// it measures 2.04s warm and 2.83s cold.
+    /// </para>
+    /// <para>
+    /// That leaves 0.17s of cold headroom, not the "second of headroom" an earlier version
+    /// of this comment claimed, and checks run <em>sequentially</em> — so the budget does
+    /// not survive a second dependency check at this timeout. Whoever adds one must lower
+    /// both, or the contract's 3 seconds stops being true. The startup guard below catches
+    /// this timeout crossing the budget; it cannot catch two timeouts summing past it.
     /// </para>
     /// </remarks>
     public static readonly TimeSpan DatabaseHealthCheckTimeout = TimeSpan.FromSeconds(2);
@@ -49,8 +55,9 @@ public static class DependencyInjection
 
     /// <summary>
     /// How long the BFF waits for readiness before giving up and calling the API
-    /// unreachable (contract §3). The value is owned by the contract, not by this
-    /// repository; it is restated here only so the relationship below can be checked.
+    /// unreachable (contract §3). Restated here for the tests that assert the two bounds
+    /// stay in the right order; the value is owned by the contract, not by this
+    /// repository.
     /// </summary>
     public static readonly TimeSpan ReadinessConsumerTimeout = TimeSpan.FromSeconds(10);
 
@@ -58,15 +65,19 @@ public static class DependencyInjection
         this IServiceCollection services,
         IConfiguration configuration)
     {
-        // The bound means nothing unless it stays under the consumer's patience. Checked
-        // here and not only in a test, because the two numbers live in different
-        // repositories and whoever widens this one will be editing this file.
-        if (DatabaseHealthCheckTimeout >= ReadinessConsumerTimeout)
+        // Guard the bound that binds. Phase 6 checked this against
+        // ReadinessConsumerTimeout, which is the loose one — 10 seconds of consumer
+        // patience is not the constraint, the contract's 3-second document budget is, and
+        // a value between the two would have satisfied the old guard while breaking the
+        // contract. Checked in code and not only in a test because the number it is
+        // measured against lives in another repository.
+        if (DatabaseHealthCheckTimeout >= ReadinessDocumentBudget)
         {
             throw new InvalidOperationException(
                 $"The database health check timeout ({DatabaseHealthCheckTimeout}) must be shorter than the "
-                + $"BFF's readiness timeout ({ReadinessConsumerTimeout}): otherwise the caller gives up first "
-                + "and a degraded API is reported as an unreachable one (contract §1).");
+                + $"contract's readiness budget ({ReadinessDocumentBudget}) — and shorter still once a second "
+                + "dependency check exists, because checks run sequentially and share that budget "
+                + "(contract §1).");
         }
 
         // ValidateOnStart is the point of this block: a missing connection string must
@@ -101,8 +112,14 @@ public static class DependencyInjection
                 failureStatus: HealthStatus.Unhealthy);
 
         // AddDbContextCheck takes no timeout, so the bound is applied to the registration
-        // it produced. Written as a loop over matches rather than Single() so that a test
-        // host which has already replaced the registrations is not made to crash here.
+        // it produced. A loop rather than Single() because a caller may legitimately have
+        // registered nothing yet — not, as this comment claimed until phase 8, because a
+        // test host might have replaced the registrations first. It cannot: this delegate
+        // is registered here and delegates run in registration order, so it always runs
+        // before anything a test adds afterwards. The consequence is worth knowing — a
+        // test host that clears and re-adds the registration replaces this bound with
+        // whatever timeout it supplies, which is why the bound is asserted against a
+        // freshly built ServiceCollection and never against the test host.
         services.Configure<HealthCheckServiceOptions>(options =>
         {
             foreach (var registration in options.Registrations)

@@ -1,5 +1,6 @@
 using System;
 using System.Threading.Tasks;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Options;
 
@@ -15,9 +16,17 @@ public class ConfigurationTests
     [Fact]
     public void Startup_without_a_connection_string_fails_and_names_the_setting()
     {
-        // No UseSetting here: appsettings.json ships the key with an empty value, which
-        // is exactly the state a developer who has not set the environment variable is in.
-        using var factory = new WebApplicationFactory<Program>();
+        // The absent value is forced, not inherited from the machine.
+        //
+        // This test used to rely on appsettings.json shipping the key empty, on the
+        // theory that this is the state a developer who has configured nothing is in.
+        // It is not: an environment variable outranks appsettings, and user secrets
+        // outrank both in Development — so on a machine set up the way
+        // docs/onboarding.md says to set it up, a connection string was present and this
+        // test failed. Green in CI, where neither exists, and red on both developers'
+        // machines, which is the worst possible place for a gate to disagree with itself.
+        using var factory = new WebApplicationFactory<Program>()
+            .WithWebHostBuilder(builder => builder.UseSetting("Database:ConnectionString", string.Empty));
 
         var exception = Assert.ThrowsAny<OptionsValidationException>(() => factory.CreateClient());
 

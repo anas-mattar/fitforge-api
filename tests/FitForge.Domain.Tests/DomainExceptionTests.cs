@@ -1,5 +1,7 @@
 using System.Linq;
+using System.IO;
 using System.Reflection;
+using System.Xml.Linq;
 using FitForge.Domain;
 
 namespace FitForge.Domain.Tests;
@@ -43,19 +45,60 @@ public class DomainExceptionTests
     }
 
     [Fact]
-    public void The_domain_assembly_references_no_third_party_package()
+    public void The_domain_project_declares_no_package_reference()
     {
         // ADR-001 §4.2, the load-bearing decision: FitForge.Domain references nothing, so
         // a calculation cannot reach a DbContext. Training invariants 1 and 5 depend on
-        // this staying true, and it is cheaper to fail here than to notice in review.
-        var allowedPrefixes = new[] { "System", "netstandard", "mscorlib", "FitForge" };
+        // it staying true.
+        //
+        // Read from the project file, not from the assembly. Until phase 8 this test
+        // called GetReferencedAssemblies(), which lists the assemblies the compiler
+        // actually emitted references to — so a PackageReference nobody had used yet
+        // passed it, and the guard only bit once someone wrote the line of code it was
+        // supposed to prevent them from being able to write. The csproj comment, ADR-001
+        // §4.3 and the phase 1 commit message all claimed more than that test delivered.
+        var project = XDocument.Load(DomainProjectPath());
 
-        var unexpected = typeof(DomainException).Assembly
-            .GetReferencedAssemblies()
-            .Select(a => a.Name ?? string.Empty)
-            .Where(name => !allowedPrefixes.Any(p => name.StartsWith(p, System.StringComparison.Ordinal)))
+        var packages = project.Descendants("PackageReference")
+            .Select(e => e.Attribute("Include")?.Value ?? "(unnamed)")
             .ToArray();
 
-        Assert.Empty(unexpected);
+        Assert.Empty(packages);
+    }
+
+    [Fact]
+    public void The_domain_project_declares_no_project_reference_either()
+    {
+        // The dependency direction is Api -> Infrastructure -> Domain -> nothing. A
+        // ProjectReference here would invert it just as effectively as a package.
+        var project = XDocument.Load(DomainProjectPath());
+
+        var references = project.Descendants("ProjectReference")
+            .Select(e => e.Attribute("Include")?.Value ?? "(unnamed)")
+            .ToArray();
+
+        Assert.Empty(references);
+    }
+
+    /// <summary>
+    /// Locates <c>FitForge.Domain.csproj</c> by walking up from the test binaries to the
+    /// repository root, so the test does not encode a build-output-relative path that
+    /// breaks the first time the output layout changes.
+    /// </summary>
+    private static string DomainProjectPath()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+
+        while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "FitForge.slnx")))
+        {
+            directory = directory.Parent;
+        }
+
+        Assert.NotNull(directory);
+
+        var path = Path.Combine(directory.FullName, "src", "FitForge.Domain", "FitForge.Domain.csproj");
+        Assert.True(File.Exists(path), $"Expected the domain project at {path}");
+
+        return path;
     }
 }
