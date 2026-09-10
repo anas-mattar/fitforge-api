@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
@@ -28,14 +30,53 @@ public class ConfigurationTests
         using var factory = new WebApplicationFactory<Program>()
             .WithWebHostBuilder(builder => builder.UseSetting("Database:ConnectionString", string.Empty));
 
-        var exception = Assert.ThrowsAny<OptionsValidationException>(() => factory.CreateClient());
-
-        var message = string.Join(" ", exception.Failures);
+        var exception = Assert.ThrowsAny<Exception>(() => factory.CreateClient());
+        var message = Flatten(exception);
 
         Assert.Contains("Database:ConnectionString", message, StringComparison.Ordinal);
         Assert.Contains("Database__ConnectionString", message, StringComparison.Ordinal);
         Assert.Contains("user-secrets", message, StringComparison.Ordinal);
+
+        // Still an options-validation failure underneath, however it is wrapped. Feature
+        // 002 phase 4 added a second validated option, and with two of them failing the
+        // host raises an AggregateException rather than the bare
+        // OptionsValidationException this test used to catch. Asserting on the flattened
+        // text rather than the wrapper type means adding a third validated setting does
+        // not break this test again.
+        Assert.Contains(
+            Unwrap(exception),
+            e => e is OptionsValidationException);
     }
+
+    [Fact]
+    public void Startup_with_nothing_configured_names_every_missing_setting_at_once()
+    {
+        // Not the same test as above. This one is about the developer who has configured
+        // nothing at all: they should learn about both settings in one run, rather than
+        // fixing one, restarting, and discovering the next.
+        //
+        // The behaviour is the host's, not ours — but it is behaviour this project relies
+        // on, and it changed once already when the second validated option arrived.
+        using var factory = new WebApplicationFactory<Program>()
+            .WithWebHostBuilder(builder =>
+            {
+                builder.UseSetting("Database:ConnectionString", string.Empty);
+                builder.UseSetting("Security:SourceAddressSalt", string.Empty);
+            });
+
+        var message = Flatten(Assert.ThrowsAny<Exception>(() => factory.CreateClient()));
+
+        Assert.Contains("Database:ConnectionString", message, StringComparison.Ordinal);
+        Assert.Contains("Security:SourceAddressSalt", message, StringComparison.Ordinal);
+    }
+
+    private static IEnumerable<Exception> Unwrap(Exception exception) =>
+        exception is AggregateException aggregate
+            ? aggregate.Flatten().InnerExceptions
+            : [exception];
+
+    private static string Flatten(Exception exception) =>
+        string.Join(" ", Unwrap(exception).Select(e => e.Message));
 
     [Fact]
     public async Task Startup_with_a_connection_string_succeeds_without_a_reachable_server()

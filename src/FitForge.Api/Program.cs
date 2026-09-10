@@ -27,6 +27,11 @@ builder.Services.AddFitForgePasswordHashing();
 // caller that ever sets the header; the browser cannot read the cookie it comes from.
 builder.Services.AddFitForgeSessions();
 
+// The sign-in throttle, and the one secret it needs. Validated at startup for the same
+// reason the connection string is: a configuration error should stop the application,
+// not surface as a member's sign-in behaving oddly.
+builder.Services.AddFitForgeSignInThrottle(builder.Configuration);
+
 var app = builder.Build();
 
 if (app.Environment.IsDevelopment())

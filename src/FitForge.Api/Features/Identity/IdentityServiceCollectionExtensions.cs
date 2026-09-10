@@ -85,4 +85,32 @@ public static class IdentityServiceCollectionExtensions
 
         return services;
     }
+
+    /// <summary>
+    /// Registers the sign-in throttle and validates its one secret at startup.
+    /// </summary>
+    /// <remarks>
+    /// Validated with <c>ValidateOnStart</c>, the same shape
+    /// <c>AddFitForgePersistence</c> uses for the connection string: a missing salt is a
+    /// configuration error, and configuration errors belong at startup with a message
+    /// naming the setting, not on a member's first failed sign-in.
+    /// </remarks>
+    public static IServiceCollection AddFitForgeSignInThrottle(
+        this IServiceCollection services,
+        IConfiguration configuration)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        ArgumentNullException.ThrowIfNull(configuration);
+
+        services.AddOptions<SignInThrottleOptions>()
+            .Bind(configuration.GetSection(SignInThrottleOptions.SectionName))
+            .Validate(
+                options => !string.IsNullOrWhiteSpace(options.SourceAddressSalt),
+                SignInThrottleOptions.MissingSaltMessage)
+            .ValidateOnStart();
+
+        services.AddScoped<SignInThrottle>();
+
+        return services;
+    }
 }

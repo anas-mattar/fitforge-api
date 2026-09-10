@@ -50,9 +50,26 @@ internal sealed class FitForgeApiFactory : WebApplicationFactory<Program>
     /// </summary>
     public TimeSpan? DatabaseTimeout { get; init; }
 
+    /// <summary>
+    /// Points the application at a real database. Left unset, the factory uses a string
+    /// that is valid but unreachable, which is what every test that is not about
+    /// persistence wants (see the remarks above).
+    /// </summary>
+    /// <remarks>
+    /// Added in feature 002 phase 4, when the endpoint tests started needing rows.
+    /// <c>SqlServerDatabase</c> supplies the value; nothing else should.
+    /// </remarks>
+    public string? ConnectionString { get; init; }
+
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
+        // Startup validates that the salt is present (feature 002 phase 4). A fixed value
+        // is right here and is not a credential: it salts a hash of a source address, and
+        // no test asserts what the salt IS - only that behaviour is consistent under one.
+        builder.UseSetting("Security:SourceAddressSalt", "tests-only-salt");
+
         builder.UseSetting("Database:ConnectionString",
+            ConnectionString ??
             "Server=(localdb)\\FitForgeTests;Database=FitForge;Trusted_Connection=True;TrustServerCertificate=True");
 
         builder.ConfigureTestServices(services =>
