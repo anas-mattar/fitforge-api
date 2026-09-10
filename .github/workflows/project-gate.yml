@@ -29,14 +29,63 @@ permissions:
 jobs:
   project-gate:
     runs-on: ubuntu-latest
+
+    # A REAL SQL Server for the tests (feature 002, tasks.md A4 option (a), approved by
+    # anas.m 2026-09-10). Not SQLite and not the in-memory provider: this feature's
+    # headline claim is that one member cannot read another's data, and that claim is
+    # carried by a unique index, a foreign key and a global query filter. A provider that
+    # enforces none of them turns SC-002 into a green run that means nothing.
+    #
+    # The test fixture (tests/FitForge.Api.Tests/SqlServerDatabase.cs) creates a
+    # uniquely-named database per run, applies THE MIGRATIONS, and drops it afterwards.
+    services:
+      sqlserver:
+        image: mcr.microsoft.com/mssql/server:2022-latest
+        env:
+          ACCEPT_EULA: 'Y'
+          # NEVER inline this. It comes from a repository secret; the guard step below
+          # fails the job loudly if the secret is missing, because a container that
+          # silently refuses to start would show up as a confusing test failure rather
+          # than as the configuration error it is.
+          MSSQL_SA_PASSWORD: ${{ secrets.MSSQL_SA_PASSWORD }}
+        ports:
+          - 1433:1433
+        options: >-
+          --health-cmd "/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P \"$MSSQL_SA_PASSWORD\" -Q 'SELECT 1'"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+          --health-start-period 30s
+
     steps:
       - uses: actions/checkout@v4
+
+      # Fail on the configuration error, not three minutes later on a connection timeout.
+      # Without this the job would still fail, but it would fail as "the tests could not
+      # reach a database" - which reads like a flake and gets re-run instead of fixed.
+      - name: Require the database secret
+        shell: bash
+        run: |
+          if [ -z "${{ secrets.MSSQL_SA_PASSWORD }}" ]; then
+            echo "::error::MSSQL_SA_PASSWORD is not set. The tests need a real SQL Server"
+            echo "::error::(feature 002 tasks.md A4). Add it under Settings > Secrets and"
+            echo "::error::variables > Actions. Do NOT inline a password in this file."
+            exit 1
+          fi
+
       - name: Set up .NET (version pinned by global.json)
         uses: actions/setup-dotnet@v4
         with:
           global-json-file: global.json
+
       - name: Run the project gate
         working-directory: '.'
         shell: bash
+        env:
+          # The fixture overrides Initial Catalog with a name of its own, so this string
+          # names a server, never a database. Locally the variable is unset and the
+          # fixture falls back to LocalDB, so a developer on Windows needs no setup.
+          FITFORGE_TEST_SQL: >-
+            Server=127.0.0.1,1433;User Id=sa;Password=${{ secrets.MSSQL_SA_PASSWORD }};TrustServerCertificate=True
         run: |
           dotnet build --warnaserror && dotnet test
