@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- ADR-001 (specs/001-solution-scaffold/plan.md §4.2): this project references NO
+       package. Not EF Core, not ASP.NET Core, not a JSON library.
+
+       That absence is the whole point. Training invariants 1 (a completed session is
+       immutable) and 5 (personal records, volume, streak and adherence are derived and
+       never stored) are the rules that rot when calculation code sits within reach of a
+       DbContext. A project with no package reference is the only guard against that which
+       does not depend on somebody remembering — adding one here is a visible, reviewable
+       diff, and reviewers are told to refuse it.
+
+       If you are here to add a PackageReference: you almost certainly want
+       FitForge.Infrastructure or FitForge.Api instead. -->
+
+</Project>

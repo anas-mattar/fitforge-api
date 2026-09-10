@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- ADR-001 §4.3: this project is FitForge's persistence boundary. FitForgeDbContext,
+       every IEntityTypeConfiguration and every migration live here and nowhere else.
+       EF Core arrives in phase 2; phase 1 establishes only the project and the direction
+       of its references. -->
+
+  <ItemGroup>
+    <ProjectReference Include="..\FitForge.Domain\FitForge.Domain.csproj" />
+  </ItemGroup>
+
+</Project>

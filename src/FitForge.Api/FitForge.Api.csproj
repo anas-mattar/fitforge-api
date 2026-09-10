@@ -1,13 +1,24 @@
 <Project Sdk="Microsoft.NET.Sdk.Web">
 
-  <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
-    <Nullable>enable</Nullable>
-    <ImplicitUsings>enable</ImplicitUsings>
-  </PropertyGroup>
+  <!-- ADR-001 §4.2: references point one way only —
+       Api -> Infrastructure -> Domain -> nothing. Nothing may reference Api.
+       TargetFramework, Nullable, ImplicitUsings and TreatWarningsAsErrors are set for
+       every project in Directory.Build.props. -->
 
   <ItemGroup>
     <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.12" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\FitForge.Domain\FitForge.Domain.csproj" />
+    <ProjectReference Include="..\FitForge.Infrastructure\FitForge.Infrastructure.csproj" />
+  </ItemGroup>
+
+  <!-- Host wiring is internal — nothing outside this assembly should construct it.
+       The tests are the exception: the exception handler is exercised directly so the
+       application ships no route that exists only to be thrown from. -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="FitForge.Api.Tests" />
   </ItemGroup>
 
 </Project>
