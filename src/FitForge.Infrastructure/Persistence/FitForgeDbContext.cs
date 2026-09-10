@@ -1,10 +1,10 @@
+using FitForge.Domain.Members;
 using Microsoft.EntityFrameworkCore;
 
 namespace FitForge.Infrastructure.Persistence;
 
 /// <summary>
-/// FitForge's only database context. Carries no <c>DbSet</c> yet — the first entities
-/// arrive with feature 002.
+/// FitForge's only database context.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -20,6 +20,17 @@ namespace FitForge.Infrastructure.Persistence;
 /// </remarks>
 public class FitForgeDbContext(DbContextOptions<FitForgeDbContext> options) : DbContext(options)
 {
+    /// <summary>
+    /// Members. A global query filter hides soft-deleted rows, so a caller has to opt in
+    /// to seeing them rather than remember to exclude them.
+    /// </summary>
+    public DbSet<Member> Members => Set<Member>();
+
+    /// <summary>
+    /// Member profiles, one per member, same filter.
+    /// </summary>
+    public DbSet<Profile> Profiles => Set<Profile>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
