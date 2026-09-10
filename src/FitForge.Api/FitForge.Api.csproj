@@ -16,6 +16,20 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.12" />
+    <!-- Design-time only, and NOT a new package: already on 001 plan §5 approved
+         list for this repository, referenced by FitForge.Infrastructure too. The EF
+         tools resolve the DbContext through the STARTUP project, so
+         `dotnet ef migrations add` needs it here even though every migration lives
+         in Infrastructure (ADR-001 §4.3). PrivateAssets=all keeps it out of the
+         published output and out of anything referencing this project.
+         It arrives in phase 3 rather than phase 1 because phase 1 Territory did not
+         declare this path and scope-check-repos said so - see tasks.md A3. The
+         alternative, an IDesignTimeDbContextFactory, was rejected: it reads the
+         connection string by a second path that can drift from the host. -->
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.12">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
   </ItemGroup>
 
   <ItemGroup>

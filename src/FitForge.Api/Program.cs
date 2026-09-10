@@ -23,6 +23,10 @@ builder.Services.AddExceptionHandler<DomainExceptionHandler>();
 // indistinguishable from a wrong password is computed once, here, not per request.
 builder.Services.AddFitForgePasswordHashing();
 
+// Sessions and the bearer scheme that resolves them (plan.md D3). The BFF is the only
+// caller that ever sets the header; the browser cannot read the cookie it comes from.
+builder.Services.AddFitForgeSessions();
+
 var app = builder.Build();
 
 if (app.Environment.IsDevelopment())
@@ -35,7 +39,14 @@ app.UseStatusCodePages();
 
 app.UseHttpsRedirection();
 
+// Order matters and is not incidental: authentication resolves the session and populates
+// CurrentMember, authorization then decides. Swapping them would make every
+// RequireAuthorization() endpoint reject a valid session.
+app.UseAuthentication();
+app.UseAuthorization();
+
 app.MapHealthEndpoints();
+app.MapAuthEndpoints();
 
 app.Run();
 

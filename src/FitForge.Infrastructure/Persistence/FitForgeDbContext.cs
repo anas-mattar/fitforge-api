@@ -31,6 +31,19 @@ public class FitForgeDbContext(DbContextOptions<FitForgeDbContext> options) : Db
     /// </summary>
     public DbSet<Profile> Profiles => Set<Profile>();
 
+    /// <summary>
+    /// Live and dead sessions. No query filter: a session is not soft-deleted, and
+    /// whether one is usable is decided by the join to <see cref="Members"/> plus its own
+    /// expiry and revocation columns, in <c>SessionService</c>.
+    /// </summary>
+    public DbSet<Session> Sessions => Set<Session>();
+
+    /// <summary>
+    /// Failed sign-in attempts inside the throttle's window. A counter, not a log —
+    /// pruned by the retention service.
+    /// </summary>
+    public DbSet<SignInAttempt> SignInAttempts => Set<SignInAttempt>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);

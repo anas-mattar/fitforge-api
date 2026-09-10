@@ -1,5 +1,8 @@
+using FitForge.Api.Hosting.Authentication;
 using FitForge.Domain.Members;
+using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Identity;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace FitForge.Api.Features.Identity;
 
@@ -47,6 +50,38 @@ public static class IdentityServiceCollectionExtensions
         // stretch is paid once at startup rather than on every sign-in for an address
         // that does not exist.
         services.AddSingleton<MemberPasswordHasher>();
+
+        return services;
+    }
+
+    /// <summary>
+    /// Registers session issue/resolve/revoke and the bearer scheme that uses them.
+    /// </summary>
+    /// <remarks>
+    /// One scheme, no default challenge beyond 401: there is no login page to redirect
+    /// to, because the API never renders one. The BFF owns that (<c>plan.md</c> D11).
+    /// </remarks>
+    public static IServiceCollection AddFitForgeSessions(this IServiceCollection services)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+
+        // Scoped: both hold or reach a DbContext, and CurrentMember is per request by
+        // definition — a singleton would hand one member's identity to another's request,
+        // which is invariant 2's worst failure produced by a DI lifetime.
+        services.AddScoped<SessionService>();
+        services.AddScoped<CurrentMember>();
+
+        // TimeProvider.System unless a test replaced it. Injected rather than DateTime.UtcNow
+        // so expiry and the touch interval are testable without waiting fourteen days.
+        services.TryAddSingleton(TimeProvider.System);
+
+        services
+            .AddAuthentication(BearerSessionHandler.SchemeName)
+            .AddScheme<AuthenticationSchemeOptions, BearerSessionHandler>(
+                BearerSessionHandler.SchemeName,
+                configureOptions: null);
+
+        services.AddAuthorization();
 
         return services;
     }
