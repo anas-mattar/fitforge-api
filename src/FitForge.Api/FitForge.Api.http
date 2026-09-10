@@ -4,7 +4,9 @@
 GET {{FitForge.Api_HostAddress}}/health/live
 Accept: application/json
 
-### Readiness arrives in phase 2.
+### Readiness — can it serve real requests? 200 ready, 503 degraded.
+GET {{FitForge.Api_HostAddress}}/health/ready
+Accept: application/json
 
 ### Any unmatched route must answer as application/problem+json, not framework HTML.
 GET {{FitForge.Api_HostAddress}}/no-such-route

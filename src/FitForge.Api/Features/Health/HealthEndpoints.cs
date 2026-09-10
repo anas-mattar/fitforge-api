@@ -1,6 +1,9 @@
+using System.Collections.Generic;
+using System.Linq;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
+using Microsoft.Extensions.Diagnostics.HealthChecks;
 
 namespace FitForge.Api.Features.Health;
 
@@ -23,7 +26,33 @@ internal static class HealthEndpoints
             .WithName("HealthLive")
             .WithTags("Health");
 
-        // GET /health/ready arrives in phase 2, with the dependency checks it reports on.
+        // Readiness answers: can this process serve real requests right now? 200 when
+        // every dependency is usable, 503 when at least one is not (contract §1).
+        endpoints.MapGet("/health/ready", async (HealthCheckService healthChecks, CancellationToken cancellationToken) =>
+        {
+            var report = await healthChecks.CheckHealthAsync(cancellationToken);
+
+            var response = new ReadinessResponse(
+                Status: report.Status == HealthStatus.Unhealthy ? "degraded" : "ready",
+                Checks: report.Entries
+                    .Select(entry => new ReadinessCheck(
+                        Name: entry.Key,
+                        // A degraded dependency is not a ready one: the contract has two
+                        // per-check values, so anything short of Healthy reports "failed".
+                        Status: entry.Value.Status == HealthStatus.Healthy ? "ready" : "failed",
+                        DurationMs: (long)entry.Value.Duration.TotalMilliseconds))
+                    .OrderBy(check => check.Name, System.StringComparer.Ordinal)
+                    .ToArray());
+
+            // Deliberately nothing else. The check's own Description and Exception carry
+            // server names, connection strings and provider messages, and this endpoint
+            // is reachable by anything that can reach the API (contract §1).
+            return report.Status == HealthStatus.Unhealthy
+                ? Results.Json(response, statusCode: StatusCodes.Status503ServiceUnavailable)
+                : Results.Ok(response);
+        })
+            .WithName("HealthReady")
+            .WithTags("Health");
 
         return endpoints;
     }
@@ -31,3 +60,13 @@ internal static class HealthEndpoints
 
 /// <summary>Response body of <c>GET /health/live</c>. Serialized camelCase (contract §3).</summary>
 internal sealed record LivenessResponse(string Status);
+
+/// <summary>Response body of <c>GET /health/ready</c> (contract §1).</summary>
+internal sealed record ReadinessResponse(string Status, IReadOnlyList<ReadinessCheck> Checks);
+
+/// <summary>
+/// One dependency's result. <c>Name</c> is a stable machine identifier, lower-case,
+/// never a display string (contract §1). <c>DurationMs</c> is integer milliseconds,
+/// per the suffix convention in contract §3.
+/// </summary>
+internal sealed record ReadinessCheck(string Name, string Status, long DurationMs);

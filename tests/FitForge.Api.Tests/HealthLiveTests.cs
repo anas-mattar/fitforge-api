@@ -1,8 +1,8 @@
+using System;
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using System.Threading.Tasks;
-using Microsoft.AspNetCore.Mvc.Testing;
 
 namespace FitForge.Api.Tests;
 
@@ -11,10 +11,18 @@ namespace FitForge.Api.Tests;
 /// <c>specs/001-solution-scaffold/contracts/health.md</c> §1. The BFF is written against
 /// that contract, so a change here that nobody notices breaks the other repository.
 /// </summary>
-public class HealthLiveTests(WebApplicationFactory<Program> factory)
-    : IClassFixture<WebApplicationFactory<Program>>
+public class HealthLiveTests : IDisposable
 {
-    private readonly HttpClient _client = factory.CreateClient();
+    private readonly FitForgeApiFactory _factory = new();
+    private readonly HttpClient _client;
+
+    public HealthLiveTests() => _client = _factory.CreateClient();
+
+    public void Dispose()
+    {
+        _client.Dispose();
+        _factory.Dispose();
+    }
 
     [Fact]
     public async Task Returns_200_with_the_exact_contract_body()
@@ -35,12 +43,17 @@ public class HealthLiveTests(WebApplicationFactory<Program> factory)
     }
 
     [Fact]
-    public async Task Performs_no_dependency_work()
+    public async Task Answers_even_when_no_dependency_is_usable()
     {
-        // Liveness must answer with no database configured at all — which is the state
-        // this test host runs in. If someone later gives it a dependency check, this
-        // fails, and the reason is contract §1: liveness MUST NOT touch the database.
-        var response = await _client.GetAsync("/health/live");
+        // Liveness MUST NOT touch the database (contract §1). This host's database check
+        // is failing, so if liveness ever starts consulting dependencies, this goes red.
+        using var unhealthy = new FitForgeApiFactory
+        {
+            DatabaseStatus = Microsoft.Extensions.Diagnostics.HealthChecks.HealthStatus.Unhealthy,
+        };
+        using var client = unhealthy.CreateClient();
+
+        var response = await client.GetAsync("/health/live");
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }

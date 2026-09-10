@@ -1,3 +1,4 @@
+using System;
 using System.IO;
 using System.Net;
 using System.Net.Http;
@@ -7,7 +8,6 @@ using System.Threading.Tasks;
 using FitForge.Api.Hosting;
 using FitForge.Domain;
 using Microsoft.AspNetCore.Http;
-using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.Hosting;
@@ -18,10 +18,18 @@ namespace FitForge.Api.Tests;
 /// ADR-001 §4.4: every failure leaves this API as <c>application/problem+json</c>, and
 /// outside Development it carries no internal detail.
 /// </summary>
-public class ProblemDetailsTests(WebApplicationFactory<Program> factory)
-    : IClassFixture<WebApplicationFactory<Program>>
+public class ProblemDetailsTests : IDisposable
 {
-    private readonly HttpClient _client = factory.CreateClient();
+    private readonly FitForgeApiFactory _factory = new();
+    private readonly HttpClient _client;
+
+    public ProblemDetailsTests() => _client = _factory.CreateClient();
+
+    public void Dispose()
+    {
+        _client.Dispose();
+        _factory.Dispose();
+    }
 
     [Fact]
     public async Task Unmatched_route_returns_404_as_problem_json()
