@@ -2,6 +2,7 @@ using FitForge.Api.Features.Health;
 using FitForge.Api.Features.Identity;
 using FitForge.Api.Features.Me;
 using FitForge.Api.Hosting;
+using FitForge.Api.Hosting.Retention;
 using FitForge.Infrastructure;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -32,6 +33,12 @@ builder.Services.AddFitForgeSessions();
 // reason the connection string is: a configuration error should stop the application,
 // not surface as a member's sign-in behaving oddly.
 builder.Services.AddFitForgeSignInThrottle(builder.Configuration);
+
+// Invariant 10's second half: a soft delete makes data recoverable, and this is what
+// eventually makes it unrecoverable. The runner is separate from the schedule so it can
+// be tested without waiting a day.
+builder.Services.AddScoped<RetentionRunner>();
+builder.Services.AddHostedService<RetentionService>();
 
 var app = builder.Build();
 
