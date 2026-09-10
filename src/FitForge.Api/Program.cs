@@ -1,5 +1,6 @@
 using FitForge.Api.Features.Health;
 using FitForge.Api.Features.Identity;
+using FitForge.Api.Features.Me;
 using FitForge.Api.Hosting;
 using FitForge.Infrastructure;
 
@@ -52,6 +53,7 @@ app.UseAuthorization();
 
 app.MapHealthEndpoints();
 app.MapAuthEndpoints();
+app.MapMeEndpoints();
 
 app.Run();
 
