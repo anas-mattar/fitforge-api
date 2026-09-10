@@ -5,6 +5,15 @@
        TargetFramework, Nullable, ImplicitUsings and TreatWarningsAsErrors are set for
        every project in Directory.Build.props. -->
 
+  <!-- The startup message for a missing connection string tells the developer to run
+       'dotnet user-secrets set'. Without this identifier that command exits with
+       "Could not find the global property 'UserSecretsId'" - so the message whose whole
+       purpose is to save the reader an afternoon cost them one instead. Do not remove it
+       when regenerating this file; UserSecretsIdTests asserts it is here. -->
+  <PropertyGroup>
+    <UserSecretsId>fitforge-api-5f1c9a24-3d47-4a0b-9c2e-8b6d1e0f7a35</UserSecretsId>
+  </PropertyGroup>
+
   <ItemGroup>
     <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.12" />
   </ItemGroup>

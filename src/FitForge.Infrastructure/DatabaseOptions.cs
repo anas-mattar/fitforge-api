@@ -23,9 +23,11 @@ public sealed class DatabaseOptions
     /// </remarks>
     public const string MissingConnectionStringMessage =
         "No database connection string. Set 'Database:ConnectionString' — as the environment " +
-        "variable Database__ConnectionString, or for local development with " +
-        "'dotnet user-secrets set \"Database:ConnectionString\" \"...\"'. It is deliberately empty " +
-        "in appsettings.json: the name belongs in source, the value does not.";
+        "variable Database__ConnectionString, or in the Development environment with " +
+        "'dotnet user-secrets set \"Database:ConnectionString\" \"...\" --project src/FitForge.Api'. " +
+        "User secrets are read only in Development, so outside it the environment variable is the " +
+        "one that works. It is deliberately empty in appsettings.json: the name belongs in source, " +
+        "the value does not.";
 
     /// <summary>SQL Server connection string. Supplied by the environment.</summary>
     public string ConnectionString { get; set; } = string.Empty;
