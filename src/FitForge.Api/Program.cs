@@ -1,4 +1,5 @@
 using FitForge.Api.Features.Health;
+using FitForge.Api.Features.Identity;
 using FitForge.Api.Hosting;
 using FitForge.Infrastructure;
 
@@ -16,6 +17,11 @@ builder.Services.AddFitForgePersistence(builder.Configuration);
 // handler produced a body for — 404 on an unmatched route, 405 on a wrong method.
 builder.Services.AddProblemDetails();
 builder.Services.AddExceptionHandler<DomainExceptionHandler>();
+
+// Password hashing, and only password hashing — deliberately not AddIdentity (see the
+// extension). Registered at startup because the decoy hash that keeps an unknown address
+// indistinguishable from a wrong password is computed once, here, not per request.
+builder.Services.AddFitForgePasswordHashing();
 
 var app = builder.Build();
 
