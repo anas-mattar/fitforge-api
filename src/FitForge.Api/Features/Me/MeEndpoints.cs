@@ -159,14 +159,18 @@ public static class MeEndpoints
 
     private static async Task<IResult> ChangePasswordAsync(
         ChangePasswordRequest request,
+        HttpContext http,
         CurrentMember current,
         FitForgeDbContext db,
         MemberPasswordHasher hasher,
         SessionService sessions,
+        SignInThrottle throttle,
+        SourceAddress sourceAddress,
         TimeProvider clock,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(http);
         ArgumentNullException.ThrowIfNull(current);
 
         var member = await db.Members
@@ -174,6 +178,17 @@ public static class MeEndpoints
             .FirstAsync(m => m.Id == current.Member.Id, cancellationToken);
 
         var observedHash = member.PasswordHash;
+
+        // This is a password verification, so it is throttled like one (finding F6). It
+        // was not, and the hole was specific: someone holding a stolen session — a shared
+        // machine, a proxy log — could guess `currentPassword` at request rate forever,
+        // reading 401-versus-422-versus-204 as a clean oracle, while the per-email bucket
+        // that exists for exactly this never saw a single attempt.
+        if (await throttle.TryRecordAsync(
+                member.NormalizedEmail, sourceAddress.Of(http), cancellationToken) is { } wait)
+        {
+            return ThrottleResults.TooManyAttempts(http, wait);
+        }
 
         if (!hasher.Verify(member, request.CurrentPassword ?? string.Empty).Succeeded)
         {
@@ -185,6 +200,12 @@ public static class MeEndpoints
                 title: "Your current password is incorrect.",
                 statusCode: StatusCodes.Status401Unauthorized);
         }
+
+        // Cleared here rather than at the end, because the authentication is what succeeded
+        // and it succeeded now. A member who proves their current password and then picks
+        // three new ones the policy rejects has made one successful attempt, not four
+        // failed ones, and must not walk away closer to being locked out of sign-in.
+        await throttle.ClearEmailAsync(member.NormalizedEmail, cancellationToken);
 
         var newPassword = request.NewPassword ?? string.Empty;
         var violation = PasswordPolicy.Check(newPassword, member.Email);
@@ -250,17 +271,31 @@ public static class MeEndpoints
         // /me/delete - would either put a credential in a URL (never) or change an
         // approved contract to avoid one attribute.
         [Microsoft.AspNetCore.Mvc.FromBody] DeleteMeRequest request,
+        HttpContext http,
         CurrentMember current,
         FitForgeDbContext db,
         MemberPasswordHasher hasher,
         SessionService sessions,
+        SignInThrottle throttle,
+        SourceAddress sourceAddress,
         TimeProvider clock,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(http);
         ArgumentNullException.ThrowIfNull(current);
 
         var member = await db.Members.FirstAsync(m => m.Id == current.Member.Id, cancellationToken);
+
+        // Throttled for the same reason the re-authentication exists (finding F6). The
+        // comment below says a stolen session should not be able to destroy an account;
+        // an unlimited guessing loop against this route defeats that sentence, and this is
+        // the one action in the feature with no undo after the retention window.
+        if (await throttle.TryRecordAsync(
+                member.NormalizedEmail, sourceAddress.Of(http), cancellationToken) is { } wait)
+        {
+            return ThrottleResults.TooManyAttempts(http, wait);
+        }
 
         // Deletion re-authenticates. A stolen session should not be able to destroy an
         // account — of everything in this feature, this is the action with no undo after
@@ -272,6 +307,12 @@ public static class MeEndpoints
                 title: "Your password is incorrect.",
                 statusCode: StatusCodes.Status401Unauthorized);
         }
+
+        // The password was right, so the attempt above was not a failure. Cleared before
+        // the transaction opens: this is an ExecuteDelete on an unrelated table, and
+        // enrolling it in the deletion's transaction would widen that transaction for no
+        // reason.
+        await throttle.ClearEmailAsync(member.NormalizedEmail, cancellationToken);
 
         var now = clock.GetUtcNow().UtcDateTime;
         var actor = member.PublicId.ToString();

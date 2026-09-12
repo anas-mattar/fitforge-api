@@ -1,6 +1,8 @@
 using System;
+using System.Net;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
@@ -61,6 +63,31 @@ internal sealed class FitForgeApiFactory : WebApplicationFactory<Program>
     /// </remarks>
     public string? ConnectionString { get; init; }
 
+    /// <summary>
+    /// The address requests appear to arrive from. Defaults to the one the factory also
+    /// declares trusted, so a test that sends <c>X-Forwarded-For</c> is believed.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <c>TestServer</c> simulates no transport, so <c>HttpContext.Connection.RemoteIpAddress</c>
+    /// is null and <see cref="FitForge.Api.Features.Identity.SourceAddress"/> correctly
+    /// answers "unknown" for every request. Supplying one is filling in the layer the test
+    /// host does not have — not stubbing the code under test.
+    /// </para>
+    /// <para>
+    /// The distinction matters here more than usual. Feature 002's finding F1 was a suite
+    /// that stayed green because the throttle tests set the <c>X-Forwarded-For</c> header
+    /// themselves, on a production path where nothing ever set it. Setting the peer address
+    /// is the opposite move: the trust decision, the header parsing and which entry is read
+    /// all still run for real, and a test can now make the peer untrusted and watch the
+    /// header be ignored.
+    /// </para>
+    /// </remarks>
+    public string PeerAddress { get; init; } = TrustedPeer;
+
+    /// <summary>The one address this factory tells the API to believe.</summary>
+    public const string TrustedPeer = "127.0.0.1";
+
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         // Startup validates that the salt is present (feature 002 phase 4). A fixed value
@@ -68,12 +95,17 @@ internal sealed class FitForgeApiFactory : WebApplicationFactory<Program>
         // no test asserts what the salt IS - only that behaviour is consistent under one.
         builder.UseSetting("Security:SourceAddressSalt", "tests-only-salt");
 
+        // Startup also validates that at least one proxy is trusted (feature 002 phase 13).
+        builder.UseSetting("Security:TrustedProxies:0", TrustedPeer);
+
         builder.UseSetting("Database:ConnectionString",
             ConnectionString ??
             "Server=(localdb)\\FitForgeTests;Database=FitForge;Trusted_Connection=True;TrustServerCertificate=True");
 
         builder.ConfigureTestServices(services =>
         {
+            services.AddSingleton<IStartupFilter>(new PeerAddressFilter(IPAddress.Parse(PeerAddress)));
+
             services.Configure<HealthCheckServiceOptions>(options =>
             {
                 options.Registrations.Clear();
@@ -85,6 +117,27 @@ internal sealed class FitForgeApiFactory : WebApplicationFactory<Program>
                     timeout: DatabaseTimeout));
             });
         });
+    }
+
+    /// <summary>
+    /// Gives every request a connection to have come from, ahead of the whole pipeline.
+    /// </summary>
+    /// <remarks>
+    /// An <see cref="IStartupFilter"/> rather than test middleware in the application, so
+    /// nothing in <c>Program.cs</c> knows tests exist.
+    /// </remarks>
+    private sealed class PeerAddressFilter(IPAddress peer) : IStartupFilter
+    {
+        public Action<IApplicationBuilder> Configure(Action<IApplicationBuilder> next) => app =>
+        {
+            app.Use(async (context, proceed) =>
+            {
+                context.Connection.RemoteIpAddress = peer;
+                await proceed();
+            });
+
+            next(app);
+        };
     }
 
     private sealed class StubHealthCheck(HealthStatus status, string? detail, TimeSpan? delay) : IHealthCheck

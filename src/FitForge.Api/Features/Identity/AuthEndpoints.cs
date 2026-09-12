@@ -1,4 +1,3 @@
-using System.Globalization;
 using FitForge.Api.Hosting.Authentication;
 using FitForge.Domain.Members;
 using FitForge.Infrastructure.Persistence;
@@ -17,11 +16,6 @@ public static class AuthEndpoints
     /// wording is VI-012, verbatim).
     /// </summary>
     private const string InvalidCredentials = "Email or password is incorrect.";
-
-    /// <summary>
-    /// The header the BFF forwards the caller's address in (<c>contracts/auth.md</c> §6).
-    /// </summary>
-    private const string ForwardedFor = "X-Forwarded-For";
 
     public static IEndpointRouteBuilder MapAuthEndpoints(this IEndpointRouteBuilder app)
     {
@@ -52,13 +46,17 @@ public static class AuthEndpoints
 
     private static async Task<IResult> RegisterAsync(
         RegisterRequest request,
+        HttpContext http,
         FitForgeDbContext db,
         MemberPasswordHasher hasher,
         SessionService sessions,
+        SignInThrottle throttle,
+        SourceAddress sourceAddress,
         TimeProvider clock,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(http);
 
         var email = EmailAddress.ForDisplay(request.Email ?? string.Empty);
         var displayName = (request.DisplayName ?? string.Empty).Trim();
@@ -94,6 +92,31 @@ public static class AuthEndpoints
         }
 
         var normalized = EmailAddress.Normalize(email);
+
+        // contracts/auth.md §2 lists a 429 under register and points at §6 for it. Nothing
+        // implemented it, and the gap was not cosmetic (finding F3): 409-versus-201 is an
+        // unlimited, unauthenticated existence oracle — precisely the one §3 spends a decoy
+        // hash to close — and every call reached the 210,000-iteration hash below.
+        //
+        // Recorded before anything expensive happens, on the same two buckets as sign-in,
+        // so an address cannot be probed here more cheaply than there.
+        var source = sourceAddress.Of(http);
+
+        if (await throttle.TryRecordAsync(normalized, source, cancellationToken) is { } wait)
+        {
+            return ThrottleResults.TooManyAttempts(http, wait);
+        }
+
+        // Answered before the hash, and that is the point of asking. The unique index below
+        // is still the arbiter under a race — a check-then-insert cannot be — but an
+        // enumeration probe that is going to be told 409 should not first cost the server a
+        // deliberate 210,000 iterations. This turns the oracle's price for the ATTACKER up
+        // (the throttle) and for the SERVER down (this), which is the right way round.
+        if (await ExistsAsync(db, normalized, cancellationToken))
+        {
+            return EmailTaken();
+        }
+
         var now = clock.GetUtcNow().UtcDateTime;
 
         var member = new Member
@@ -139,6 +162,10 @@ public static class AuthEndpoints
             return EmailTaken();
         }
 
+        // §6 counts failed attempts. This one succeeded, so the row written above is
+        // removed — the same clearing a successful sign-in does, and for the same reason.
+        await throttle.ClearEmailAsync(normalized, cancellationToken);
+
         var token = await sessions.IssueAsync(member, cancellationToken);
 
         return Results.Created($"/api/v1/members/{member.PublicId}", new
@@ -158,6 +185,7 @@ public static class AuthEndpoints
         MemberPasswordHasher hasher,
         SessionService sessions,
         SignInThrottle throttle,
+        SourceAddress sourceAddress,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -165,19 +193,20 @@ public static class AuthEndpoints
 
         var normalized = EmailAddress.Normalize(request.Email ?? string.Empty);
         var password = request.Password ?? string.Empty;
-        var source = http.Request.Headers[ForwardedFor].ToString();
 
-        // Before any hashing. A throttle applied after the deliberate 210,000-iteration
-        // stretch would amplify a denial of service rather than blunt one.
-        if (await throttle.RetryAfterAsync(normalized, source, cancellationToken) is { } wait)
+        // Who the caller is, decided by SourceAddress rather than read from a header this
+        // endpoint would have to trust. Null means unknown, and unknown means the
+        // per-source bucket is skipped rather than shared (finding F1).
+        var source = sourceAddress.Of(http);
+
+        // Recorded and decided in one statement, before any hashing. Before, because a
+        // throttle applied after the deliberate 210,000-iteration stretch amplifies a
+        // denial of service rather than blunting one. In one statement, because the gap
+        // between counting and recording used to span that stretch, and every concurrent
+        // attempt read the same stale count across it (finding F2).
+        if (await throttle.TryRecordAsync(normalized, source, cancellationToken) is { } wait)
         {
-            http.Response.Headers.RetryAfter = ((int)Math.Ceiling(wait.TotalSeconds))
-                .ToString(CultureInfo.InvariantCulture);
-
-            return Results.Problem(
-                type: "/problems/too-many-attempts",
-                title: "Too many attempts. Try again shortly.",
-                statusCode: StatusCodes.Status429TooManyRequests);
+            return ThrottleResults.TooManyAttempts(http, wait);
         }
 
         var member = await db.Members
@@ -190,7 +219,10 @@ public static class AuthEndpoints
             // stopwatch reads as an existence oracle (plan.md D6).
             hasher.VerifyDecoy(password);
 
-            await throttle.RecordFailureAsync(normalized, source, cancellationToken);
+            // Nothing to record: the attempt was written before the lookup, exactly as it
+            // is for an address that does exist. Recording here instead would make the
+            // two paths do different amounts of work, which is what the decoy above is
+            // spending 210,000 iterations to prevent.
             return InvalidCredentialsProblem();
         }
 
@@ -198,7 +230,6 @@ public static class AuthEndpoints
 
         if (!verification.Succeeded)
         {
-            await throttle.RecordFailureAsync(normalized, source, cancellationToken);
             return InvalidCredentialsProblem();
         }
 

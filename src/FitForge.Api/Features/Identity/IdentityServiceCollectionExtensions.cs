@@ -87,13 +87,22 @@ public static class IdentityServiceCollectionExtensions
     }
 
     /// <summary>
-    /// Registers the sign-in throttle and validates its one secret at startup.
+    /// Registers the sign-in throttle and validates its configuration at startup.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// Validated with <c>ValidateOnStart</c>, the same shape
-    /// <c>AddFitForgePersistence</c> uses for the connection string: a missing salt is a
-    /// configuration error, and configuration errors belong at startup with a message
-    /// naming the setting, not on a member's first failed sign-in.
+    /// <c>AddFitForgePersistence</c> uses for the connection string: a configuration error
+    /// belongs at startup with a message naming the setting, not on a member's first failed
+    /// sign-in.
+    /// </para>
+    /// <para>
+    /// <b>Three rules, not one, and the two new ones are why F1 shipped.</b> The trusted-proxy
+    /// list has no usable default. Left empty it does not fail at request time — it quietly
+    /// makes every caller's address the BFF's, which puts every member in one bucket of
+    /// thirty and turns thirty failed sign-ins into a product-wide outage. A setting whose
+    /// misconfiguration is invisible has to be refused at startup instead.
+    /// </para>
     /// </remarks>
     public static IServiceCollection AddFitForgeSignInThrottle(
         this IServiceCollection services,
@@ -107,9 +116,19 @@ public static class IdentityServiceCollectionExtensions
             .Validate(
                 options => !string.IsNullOrWhiteSpace(options.SourceAddressSalt),
                 SignInThrottleOptions.MissingSaltMessage)
+            .Validate(
+                options => options.TrustedProxies.Count > 0,
+                SignInThrottleOptions.MissingTrustedProxiesMessage)
+            .Validate(
+                options => options.EntriesAreWellFormed(),
+                SignInThrottleOptions.MalformedTrustedProxyMessage)
             .ValidateOnStart();
 
         services.AddScoped<SignInThrottle>();
+
+        // Singleton: it holds the parsed proxy list, which is read on every sign-in and
+        // changes only when the process restarts.
+        services.AddSingleton<SourceAddress>();
 
         return services;
     }
