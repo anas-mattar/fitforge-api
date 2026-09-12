@@ -236,11 +236,24 @@ public class CredentialEndpointTests(SqlServerDatabase database)
     {
         // The comparison that makes the test above mean something: both kinds of address
         // behave identically, so the status code carries no information about existence.
+        //
+        // The successful sign-in below is not scene-setting, and was not here before phase
+        // 17. Since §6 was amended a registration is itself a counted attempt, so an
+        // address registered seconds ago starts one slot down and throttles one attempt
+        // EARLY — see An_address_registered_inside_the_window_starts_one_slot_down, which
+        // asserts that narrowing rather than leaving it to be discovered. Signing in
+        // successfully clears the bucket, which is the steady state every address that has
+        // ever been used reaches; in that state a real address and a ghost are
+        // indistinguishable, and that is the property this test exists to hold.
         using var factory = Api();
         using var client = factory.CreateClient();
         var email = NewEmail();
         var source = $"203.0.113.{Random.Shared.Next(1, 254)}";
         await RegisterAsync(client, email, Password);
+
+        Assert.Equal(
+            HttpStatusCode.OK,
+            (await SignInAsync(client, email, Password, source)).StatusCode);
 
         for (var attempt = 1; attempt <= SignInThrottle.MaxPerEmail; attempt++)
         {
@@ -249,6 +262,39 @@ public class CredentialEndpointTests(SqlServerDatabase database)
                 (await SignInAsync(client, email, "wrong", source)).StatusCode);
         }
 
+        Assert.Equal(
+            HttpStatusCode.TooManyRequests,
+            (await SignInAsync(client, email, "wrong", source)).StatusCode);
+    }
+
+    [Fact]
+    public async Task An_address_registered_inside_the_window_starts_one_slot_down()
+    {
+        // The narrowing phase 17 accepted, asserted rather than left implicit. A
+        // registration is now counted (§6 as amended 2026-09-12), so for the fifteen
+        // minutes after signing up — and only then — an address runs out one attempt before
+        // a ghost does.
+        //
+        // Why that is tolerable and not a reopening of T044's oracle: what it leaks is "this
+        // address registered in the last fifteen minutes", and it costs ten requests to
+        // read. POST /auth/register answers the strictly larger question "does this address
+        // exist" in ONE request, by design, and contracts/auth.md §2 accepts that asymmetry.
+        // A ten-request oracle for less information than a one-request oracle already gives
+        // is dominated, not new. Recorded for the human review either way.
+        using var factory = Api();
+        using var client = factory.CreateClient();
+        var email = NewEmail();
+        var source = $"203.0.113.{Random.Shared.Next(1, 254)}";
+        await RegisterAsync(client, email, Password);
+
+        for (var attempt = 1; attempt <= SignInThrottle.MaxPerEmail - 1; attempt++)
+        {
+            Assert.Equal(
+                HttpStatusCode.Unauthorized,
+                (await SignInAsync(client, email, "wrong", source)).StatusCode);
+        }
+
+        // One earlier than the ghost above, and the registration is the missing slot.
         Assert.Equal(
             HttpStatusCode.TooManyRequests,
             (await SignInAsync(client, email, "wrong", source)).StatusCode);
@@ -265,16 +311,20 @@ public class CredentialEndpointTests(SqlServerDatabase database)
         var source = $"198.51.100.{Random.Shared.Next(1, 254)}";
         await RegisterAsync(client, email, Password);
 
-        for (var attempt = 1; attempt < SignInThrottle.MaxPerEmail; attempt++)
+        // Eight, not nine: since phase 17 the registration above holds the ninth slot, and
+        // a tenth attempt of any kind would be refused before the password was read — so
+        // the successful sign-in this test is about could never happen.
+        for (var attempt = 1; attempt < SignInThrottle.MaxPerEmail - 1; attempt++)
         {
             await SignInAsync(client, email, "wrong", source);
         }
 
         Assert.Equal(HttpStatusCode.OK, (await SignInAsync(client, email, Password, source)).StatusCode);
 
-        // Nine failures were forgiven, so the next wrong guess is a 401 rather than the
-        // 429 it would have been. A member who mistypes their password nine times and
-        // then gets it right should not be locked out on their next visit.
+        // The failures and the registration alike were forgiven, so the next wrong guess
+        // is a 401 rather than the 429 it would have been. A member who mistypes their
+        // password repeatedly and then gets it right should not be locked out on their
+        // next visit.
         Assert.Equal(
             HttpStatusCode.Unauthorized,
             (await SignInAsync(client, email, "wrong", source)).StatusCode);
@@ -295,18 +345,25 @@ public class CredentialEndpointTests(SqlServerDatabase database)
         await SignInAsync(client, NewEmail(), "wrong", source);
         await SignInAsync(client, NewEmail(), "wrong", source);
 
-        var before = await CountAttemptsAsync();
+        // Counted excluding this member's own rows, which a success is entitled to clear.
+        // A plain total worked until phase 17 only because the registration cleared itself;
+        // now it leaves a row, and a total would measure that clearing rather than the
+        // source bucket this test is about.
+        var normalized = EmailAddress.Normalize(email);
+
+        var before = await CountOtherAttemptsAsync();
         await SignInAsync(client, email, Password, source);
-        var after = await CountAttemptsAsync();
+        var after = await CountOtherAttemptsAsync();
 
         // The two failures for other addresses survive: clearing is per email, and those
         // rows belong to different emails on the same source.
         Assert.Equal(before, after);
 
-        async Task<int> CountAttemptsAsync()
+        async Task<int> CountOtherAttemptsAsync()
         {
             await using var context = database.NewContext();
-            return await context.SignInAttempts.CountAsync();
+            return await context.SignInAttempts
+                .CountAsync(a => a.NormalizedEmail != normalized);
         }
     }
 

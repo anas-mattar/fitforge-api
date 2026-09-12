@@ -13,8 +13,8 @@ using Microsoft.EntityFrameworkCore;
 namespace FitForge.Api.Tests;
 
 /// <summary>
-/// T115, T120, T121 — which requests the throttle can see, and whose word it takes for who
-/// they came from.
+/// T115, T120, T121, T126, T127 — which requests the throttle can see, whose word it takes
+/// for who they came from, and which of them it keeps.
 /// </summary>
 /// <remarks>
 /// Feature 002's review found the throttle guarding one of the four paths that verify a
@@ -39,6 +39,21 @@ public class ThrottleReachTests(SqlServerDatabase database)
         };
 
     private static string NewEmail() => $"member-{Guid.NewGuid():N}@example.com";
+
+    /// <summary>An address no other test in this run will land in the same bucket as.</summary>
+    /// <remarks>
+    /// The documentation range 203.0.113.0/24 the tests above draw from holds 254 hosts, and
+    /// rows outlive the test that wrote them for the whole fifteen-minute window. That is
+    /// harmless when a test needs a bucket to reach two or ten; it is not harmless when one
+    /// needs a bucket to reach exactly thirty, because a collision moves the boundary and
+    /// the failure looks like a defect in the throttle. 2001:db8::/32 is the documentation
+    /// range for IPv6 and there is room in it to be sure.
+    /// </remarks>
+    private static string NewSource()
+    {
+        var id = Guid.NewGuid().ToString("N");
+        return $"2001:db8:{id[..4]}:{id[4..8]}::{id[8..12]}";
+    }
 
     private static Task<HttpResponseMessage> SendAsync(
         HttpClient client,
@@ -151,14 +166,15 @@ public class ThrottleReachTests(SqlServerDatabase database)
         // unauthenticated existence oracle — the one §3 spends a decoy hash to close.
         using var factory = Api();
         using var client = factory.CreateClient();
-        var source = $"203.0.113.{Random.Shared.Next(1, 254)}";
+        var source = NewSource();
         var email = NewEmail();
 
         Assert.Equal(HttpStatusCode.Created, (await RegisterAsync(client, email, source)).StatusCode);
 
-        // Each probe is a 409: the address now exists. Registration cleared the bucket on
-        // success, so the count starts from this point.
-        for (var probe = 1; probe <= SignInThrottle.MaxPerEmail; probe++)
+        // Each probe is a 409: the address now exists. Since phase 17 the successful
+        // registration above is itself counted and holds one of the ten slots, so nine
+        // probes remain rather than ten — the arithmetic changed with §6, not the rule.
+        for (var probe = 1; probe <= SignInThrottle.MaxPerEmail - 1; probe++)
         {
             Assert.Equal(HttpStatusCode.Conflict, (await RegisterAsync(client, email, source)).StatusCode);
         }
@@ -169,22 +185,56 @@ public class ThrottleReachTests(SqlServerDatabase database)
         Assert.NotNull(throttled.Headers.RetryAfter);
     }
 
+    // ---- T126, T127: registration is capped whatever its outcome ---------------------
+
     [Fact]
-    public async Task Registering_successfully_costs_nothing_in_either_bucket()
+    public async Task Registering_successfully_still_costs_a_slot_in_the_source_bucket()
     {
-        // §6 counts FAILED attempts. A member who registers has not failed at anything, and
-        // leaving the row would make thirty registrations from one office throttle the
-        // thirty-first.
+        // T127. This test asserted the OPPOSITE until phase 17, and it was right to: §6
+        // counted failed attempts only, and a registration that succeeds has not failed.
+        // Inverted rather than deleted, because a test still asserting the old rule would
+        // pass and quietly re-specify it.
+        //
+        // §6 as amended 2026-09-12 (approved by anas.m) counts every register attempt. The
+        // row below is the whole fix: clearing it is what made the endpoint uncappable.
         using var factory = Api();
         using var client = factory.CreateClient();
-        var source = $"203.0.113.{Random.Shared.Next(1, 254)}";
+        var source = NewSource();
         var email = NewEmail();
 
-        await RegisterAsync(client, email, source);
+        Assert.Equal(HttpStatusCode.Created, (await RegisterAsync(client, email, source)).StatusCode);
 
         await using var context = database.NewContext();
-        Assert.Equal(0, await context.SignInAttempts
+        Assert.Equal(1, await context.SignInAttempts
             .CountAsync(a => a.NormalizedEmail == EmailAddress.Normalize(email)));
+    }
+
+    [Fact]
+    public async Task Thirty_successful_registrations_from_one_source_exhaust_it()
+    {
+        // T126 — finding F3, failure scenario (b), and the reason phase 17 exists.
+        //
+        // Every address here is new, so the per-email bucket is never consulted in anger
+        // and only the per-source window can refuse anything. Against the phase 13 code
+        // this test fails at the last line with a 201: ClearEmailAsync deleted each row
+        // — including the one the attempt had just written — so the source count returned
+        // to zero after every success and the bucket never filled, while each call still
+        // paid a 210,000-iteration hash unauthenticated.
+        using var factory = Api();
+        using var client = factory.CreateClient();
+        var source = NewSource();
+
+        for (var registration = 1; registration <= SignInThrottle.MaxPerSource; registration++)
+        {
+            var allowed = await RegisterAsync(client, NewEmail(), source);
+
+            Assert.Equal(HttpStatusCode.Created, allowed.StatusCode);
+        }
+
+        var refused = await RegisterAsync(client, NewEmail(), source);
+
+        Assert.Equal(HttpStatusCode.TooManyRequests, refused.StatusCode);
+        Assert.NotNull(refused.Headers.RetryAfter);
     }
 
     // ---- T121: the /me re-authentications are throttled ------------------------------
@@ -204,7 +254,9 @@ public class ThrottleReachTests(SqlServerDatabase database)
         var token = (await registered.Content.ReadFromJsonAsync<JsonElement>())
             .GetProperty("token").GetString()!;
 
-        for (var guess = 1; guess <= SignInThrottle.MaxPerEmail; guess++)
+        // One short of MaxPerEmail: since phase 17 the registration above is itself a
+        // counted attempt and holds the tenth slot, so the guesses run out one earlier.
+        for (var guess = 1; guess <= SignInThrottle.MaxPerEmail - 1; guess++)
         {
             var attempt = await SendAsync(client, HttpMethod.Post, "/api/v1/me/password",
                 new { currentPassword = "not it", newPassword = "another good passphrase" },
@@ -235,7 +287,9 @@ public class ThrottleReachTests(SqlServerDatabase database)
         var token = (await registered.Content.ReadFromJsonAsync<JsonElement>())
             .GetProperty("token").GetString()!;
 
-        for (var guess = 1; guess <= SignInThrottle.MaxPerEmail; guess++)
+        // One short of MaxPerEmail, for the same reason as the test above: the registration
+        // is counted now, and it holds the tenth slot.
+        for (var guess = 1; guess <= SignInThrottle.MaxPerEmail - 1; guess++)
         {
             var attempt = await SendAsync(client, HttpMethod.Delete, "/api/v1/me",
                 new { password = "not it" }, source, token);

@@ -33,9 +33,13 @@ namespace FitForge.Api.Features.Identity;
 /// is what an attacker who hangs up on every response was relying on.
 /// </para>
 /// <para>
-/// A request that gets through and then <i>succeeds</i> clears the whole email bucket,
-/// which removes the row this attempt just wrote — so a success still costs nothing in
-/// either bucket, as §6 says.
+/// <b>A successful sign-in clears the whole email bucket</b>, which removes the row that
+/// attempt just wrote — so a successful <i>sign-in</i> costs nothing in either bucket.
+/// <b>Registration is the exception</b>: §6 as amended on 2026-09-12 counts every register
+/// attempt whatever its outcome, so <c>/auth/register</c> does not clear. Clearing there
+/// deleted the row the attempt had just written and returned the per-source count to zero
+/// after every success, which left the endpoint uncapped (finding F3, failure scenario
+/// (b)).
 /// </para>
 /// <para>
 /// The API is the enforcement point, not the BFF (invariant 7). The BFF forwards the
@@ -102,14 +106,25 @@ public sealed class SignInThrottle(
     }
 
     /// <summary>
-    /// Clears an address's bucket after it is used successfully.
+    /// Clears an address's bucket after a password is used successfully.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// The <b>source</b> bucket is deliberately not cleared: one success does not license
     /// thirty more guesses from the same place, which is exactly what an attacker with one
     /// valid account of their own would use it for. What this does remove from the source
     /// count is the rows carrying this email — including the one the successful attempt
     /// itself wrote, which is how a success stays uncounted in both buckets.
+    /// </para>
+    /// <para>
+    /// That last sentence is also this method's hazard, and the reason
+    /// <c>/auth/register</c> no longer calls it. Removing the attempt's own row is
+    /// harmless where the caller had to <i>prove</i> a password to get here — sign-in and
+    /// the two <c>/me</c> re-authentications — because proving one is not something an
+    /// attacker can repeat at will. Registration proves nothing, so the same removal let
+    /// an unauthenticated caller wipe its own cost forever (finding F3, failure
+    /// scenario (b)).
+    /// </para>
     /// </remarks>
     public async Task ClearEmailAsync(string normalizedEmail, CancellationToken cancellationToken)
     {

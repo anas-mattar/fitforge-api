@@ -162,10 +162,22 @@ public static class AuthEndpoints
             return EmailTaken();
         }
 
-        // §6 counts failed attempts. This one succeeded, so the row written above is
-        // removed — the same clearing a successful sign-in does, and for the same reason.
-        await throttle.ClearEmailAsync(normalized, cancellationToken);
-
+        // No ClearEmailAsync here, and the absence is the point — §6 as amended on
+        // 2026-09-12 counts every register attempt, successful or not (finding F3, failure
+        // scenario (b)).
+        //
+        // This did clear, which read as obviously right: a success is not a failure. What
+        // it actually did was uncap the endpoint. ClearEmailAsync deletes every row
+        // carrying the address, including the one TryRecordAsync wrote a few lines above,
+        // so the row never reached the per-source count it was meant to join. A script
+        // registering distinct new addresses returned that count to zero after every
+        // success and paid a deliberate 210,000-iteration hash each time, unauthenticated
+        // and without limit.
+        //
+        // Leaving it costs a new member one slot in their own email bucket for the rest of
+        // the window — nine first sign-in attempts rather than ten. Accepted and recorded
+        // in §6 rather than compensated: separating a success from a failure needs an
+        // outcome column, and a schema change is not worth this.
         var token = await sessions.IssueAsync(member, cancellationToken);
 
         return Results.Created($"/api/v1/members/{member.PublicId}", new
